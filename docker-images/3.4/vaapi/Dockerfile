@@ -9,10 +9,10 @@ FROM        ubuntu:16.04 AS base
 
 WORKDIR     /tmp/workdir
 
-RUN     apt-get -yqq update && \
-        apt-get install -yq --no-install-recommends ca-certificates expat libgomp1 && \
-        apt-get autoremove -y && \
-        apt-get clean -y
+RUN     apt -yqq update && \
+        apt install -yq --no-install-recommends ca-certificates expat libgomp1 && \
+        apt autoremove -y && \
+        apt clean -y
 
 FROM base as build
 
@@ -40,6 +40,8 @@ ENV         FFMPEG_VERSION=3.4.4     \
             FONTCONFIG_VERSION=2.12.4 \
             LIBVIDSTAB_VERSION=1.1.0  \
             KVAZAAR_VERSION=1.2.0     \
+            INTEL_HYBRID_DRIVER_VERSION=1.0.2 \
+            LIBVA_VERSION=2.2.0 \
             AOM_VERSION=master        \
             SRC=/usr/local
 
@@ -72,10 +74,10 @@ RUN      buildDeps="autoconf \
                     python \
                     libssl-dev \
                     yasm \
-                    libva-dev \
+                    libdrm-dev \
                     zlib1g-dev" && \
-        apt-get -yqq update && \
-        apt-get install -yq --no-install-recommends ${buildDeps}
+        apt -yqq update && \
+        apt install -yq --no-install-recommends ${buildDeps}
 ## opencore-amr https://sourceforge.net/projects/opencore-amr/
 RUN \
         DIR=/tmp/opencore-amr && \
@@ -309,6 +311,53 @@ RUN \
         make install ; \
         rm -rf ${dir}
 
+# Build libva (implementation for VA-API)
+RUN \
+        dir=/tmp/libva ; \
+        mkdir -p ${dir} ; \
+        cd ${dir} ; \
+        curl -sL "https://github.com/intel/libva/releases/download/${LIBVA_VERSION}/libva-${LIBVA_VERSION}.tar.bz2" | \
+        tar -jx --strip-components=1 ; \
+        ./configure --prefix=${PREFIX} CFLAGS=' -O2' CXXFLAGS=' -O2' ; \
+        make && make install ; \
+        rm -rf ${dir}
+
+# Build cmrt (TODO: for what?)
+RUN \
+        dir=/tmp/cmrt ; \
+        mkdir -p ${dir} ; \
+        cd ${dir} ; \
+        curl -sL "https://github.com/intel/cmrt/archive/1.0.6.tar.gz" | \
+        tar -zx --strip-components=1 ; \
+        ./autogen.sh && \
+        ./configure --prefix=${PREFIX} CFLAGS=' -O2' CXXFLAGS=' -O2' && \
+        make && make install ; \
+        rm -rf ${dir}
+
+# Build intel-hybrid-driver (VA-API for vp8 and vp9)
+RUN \
+        dir=/tmp/intel-hybrid-driver ; \
+        mkdir -p ${dir} ; \
+        cd ${dir} ; \
+        curl -sL "https://github.com/01org/intel-hybrid-driver/archive/${INTEL_HYBRID_DRIVER_VERSION}.tar.gz" | \
+        tar -zx --strip-components=1 ; \
+        ./autogen.sh && \
+        ./configure --prefix=${PREFIX} CFLAGS=' -O2' CXXFLAGS=' -O2' && \
+        make && make install ; \
+        rm -rf ${dir}
+
+# Build intel-vaapi-driver (VA-API user mode driver for Intel GEN Graphics family)
+RUN \
+        dir=/tmp/intel-vaapi-driver ; \
+        mkdir -p ${dir} ; \
+        cd ${dir} ; \
+        # Use the version for intel-vaapi-driver as same as libva
+        curl -sL "https://github.com/intel/intel-vaapi-driver/releases/download/${LIBVA_VERSION}/intel-vaapi-driver-${LIBVA_VERSION}.tar.bz2" | \
+        tar -jx --strip-components=1 ; \
+        ./configure --prefix=${PREFIX} CFLAGS=' -O2' CXXFLAGS=' -O2' && \
+        make && make install ; \
+        rm -rf ${dir}
+
 ## ffmpeg https://ffmpeg.org/
 RUN  \
         DIR=$(mktemp -d) && cd ${DIR} && \
@@ -373,8 +422,9 @@ ENV         LD_LIBRARY_PATH=/usr/local/lib
 COPY --from=build /usr/local /usr/local/
 
 RUN \
-	apt-get update -y && \
-	apt-get install -y --no-install-recommends libva-drm1 libva1 && \
+	apt update -y && \
+  apt install -yq --no-install-recommends libdrm-dev && \
+  apt autoremove -y && \
 	rm -rf /var/lib/apt/lists/*
 
 # Let's make sure the app built correctly
